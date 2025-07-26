@@ -56,7 +56,7 @@ syn match carrionHex "\<0[xX][0-9a-fA-F]\+\>"
 
 " Operators
 syn match carrionOperator "\v\+\+|--|\+=|-=|\*=|/=|\%=|\*\*="
-syn match carrionOperator "\v\+|-|\*|/|%|\*\*"
+syn match carrionOperator "\v\+|-|\*|/|\%|\*\*"
 syn match carrionOperator "\v\=\=|!\=|\<\=|\>\=|\<|\>"
 syn match carrionOperator "\v\="
 syn match carrionOperator "\v\&\&|\|\|"
