@@ -450,3 +450,23 @@ func (igs *IgnoreStatement) statementNode()               {}
 func (igs *IgnoreStatement) TokenLiteral() string         { return igs.Token.Literal }
 func (igs *IgnoreStatement) String() string               { return "ignore" }
 func (igs *IgnoreStatement) Position() (line, column int) { return igs.Token.Line, igs.Token.Column }
+
+// StopStatement represents stop statements (break)
+type StopStatement struct {
+	Token token.Token
+}
+
+func (ss *StopStatement) statementNode()               {}
+func (ss *StopStatement) TokenLiteral() string         { return ss.Token.Literal }
+func (ss *StopStatement) String() string               { return "stop" }
+func (ss *StopStatement) Position() (line, column int) { return ss.Token.Line, ss.Token.Column }
+
+// SkipStatement represents skip statements (continue)
+type SkipStatement struct {
+	Token token.Token
+}
+
+func (ss *SkipStatement) statementNode()               {}
+func (ss *SkipStatement) TokenLiteral() string         { return ss.Token.Literal }
+func (ss *SkipStatement) String() string               { return "skip" }
+func (ss *SkipStatement) Position() (line, column int) { return ss.Token.Line, ss.Token.Column }

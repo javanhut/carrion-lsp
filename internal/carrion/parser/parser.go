@@ -79,6 +79,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.IDENT, p.parseIdentifier)
 	p.registerPrefix(token.INIT, p.parseIdentifier) // Allow init as identifier
 	p.registerPrefix(token.SELF, p.parseIdentifier) // Allow self as identifier
+	p.registerPrefix(token.MAIN, p.parseIdentifier) // Allow main as identifier
 	p.registerPrefix(token.INT, p.parseIntegerLiteral)
 	p.registerPrefix(token.FLOAT, p.parseFloatLiteral)
 	p.registerPrefix(token.STRING, p.parseStringLiteral)
@@ -177,6 +178,10 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseClassStatement()
 	case token.RETURN:
 		return p.parseReturnStatement()
+	case token.STOP:
+		return p.parseStopStatement()
+	case token.SKIP:
+		return p.parseSkipStatement()
 	case token.IF:
 		return p.parseIfStatement()
 	case token.WHILE:
@@ -187,7 +192,7 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseImportStatement()
 	case token.IGNORE:
 		return p.parseIgnoreStatement()
-	case token.IDENT, token.INIT, token.SELF:
+	case token.IDENT, token.INIT, token.SELF, token.MAIN:
 		// Check if this is an assignment or expression statement
 		return p.parseAssignOrExpressionStatement()
 	default:
@@ -214,8 +219,8 @@ func (p *Parser) parseAssignStatement() *ast.AssignStatement {
 
 	stmt.Value = p.parseExpression(LOWEST)
 
-	// Skip optional semicolon and newline
-	if p.peekTokenIs(token.SEMICOLON) {
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
@@ -224,6 +229,18 @@ func (p *Parser) parseAssignStatement() *ast.AssignStatement {
 
 // parseAssignOrExpressionStatement determines if this is assignment or expression
 func (p *Parser) parseAssignOrExpressionStatement() ast.Statement {
+	// Check if this is a bare init(): function definition (constructor)
+	if (p.curTokenIs(token.INIT) || (p.curTokenIs(token.IDENT) && p.curToken.Literal == "init")) && p.peekTokenIs(token.LPAREN) {
+		// This is init(): constructor syntax - parse as function
+		return p.parseBareInitFunction()
+	}
+	
+	// Check if this is a main: block definition (no parentheses)
+	if (p.curTokenIs(token.MAIN) || (p.curTokenIs(token.IDENT) && p.curToken.Literal == "main")) && p.peekTokenIs(token.COLON) {
+		// This is main: block syntax - parse as main block
+		return p.parseMainBlockStatement()
+	}
+	
 	// Look ahead to see if this is an assignment
 	if p.curTokenIsIdent() && p.peekTokenIs(token.ASSIGN) {
 		// Simple assignment: x = value
@@ -252,8 +269,8 @@ func (p *Parser) parseAssignOrExpressionStatement() ast.Statement {
 			Value: value,
 		}
 
-		// Skip optional semicolon
-		if p.peekTokenIs(token.SEMICOLON) {
+		// Skip optional newline
+		if p.peekTokenIs(token.NEWLINE) {
 			p.nextToken()
 		}
 
@@ -275,8 +292,8 @@ func (p *Parser) parseAssignOrExpressionStatement() ast.Statement {
 	}
 	stmt := &ast.ExpressionStatement{Token: stmtToken, Expression: expr}
 
-	// Skip optional semicolon
-	if p.peekTokenIs(token.SEMICOLON) {
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
@@ -298,8 +315,8 @@ func (p *Parser) parseMemberAssignStatement(memberExpr *ast.MemberExpression) *a
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
 
-	// Skip optional semicolon
-	if p.peekTokenIs(token.SEMICOLON) {
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
@@ -317,11 +334,35 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 		stmt.ReturnValue = p.parseExpression(LOWEST)
 	}
 
-	// Skip optional semicolon and newline
-	if p.peekTokenIs(token.SEMICOLON) {
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
+	return stmt
+}
+
+// parseStopStatement parses stop statements (break)
+func (p *Parser) parseStopStatement() *ast.StopStatement {
+	stmt := &ast.StopStatement{Token: p.curToken}
+	
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
+// parseSkipStatement parses skip statements (continue)
+func (p *Parser) parseSkipStatement() *ast.SkipStatement {
+	stmt := &ast.SkipStatement{Token: p.curToken}
+	
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+	
 	return stmt
 }
 
@@ -330,8 +371,8 @@ func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
 	stmt := &ast.ExpressionStatement{Token: p.curToken}
 	stmt.Expression = p.parseExpression(LOWEST)
 
-	// Skip optional semicolon
-	if p.peekTokenIs(token.SEMICOLON) {
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
@@ -343,8 +384,12 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	block := &ast.BlockStatement{Token: p.curToken}
 	block.Statements = []ast.Statement{}
 
+	// Skip any additional newlines before indent
+	p.skipNewlines()
+
 	// Expect INDENT to start block
-	if !p.expectPeek(token.INDENT) {
+	if !p.curTokenIs(token.INDENT) {
+		p.addError(fmt.Sprintf("expected INDENT, got %s instead", p.curToken.Type))
 		return nil
 	}
 
@@ -513,6 +558,94 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 	return identifiers
 }
 
+// parseBareInitFunction parses init(): constructor functions without spell keyword
+func (p *Parser) parseBareInitFunction() *ast.FunctionStatement {
+	stmt := &ast.FunctionStatement{Token: p.curToken}
+	
+	// Set the function name to "init"
+	stmt.Name = &ast.Identifier{Token: p.curToken, Value: "init"}
+	
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+	
+	stmt.Parameters = p.parseFunctionParameters()
+	
+	if !p.expectPeek(token.COLON) {
+		return nil
+	}
+	
+	if !p.expectPeek(token.NEWLINE) {
+		return nil
+	}
+	
+	stmt.Body = p.parseBlockStatement()
+	
+	return stmt
+}
+
+// parseBareFunctionStatement parses bare function definitions like main(): without spell keyword
+func (p *Parser) parseBareFunctionStatement() *ast.FunctionStatement {
+	stmt := &ast.FunctionStatement{Token: p.curToken}
+	
+	// Set the function name from current token
+	stmt.Name = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+	
+	stmt.Parameters = p.parseFunctionParameters()
+	
+	if !p.expectPeek(token.COLON) {
+		return nil
+	}
+	
+	if !p.expectPeek(token.NEWLINE) {
+		return nil
+	}
+	
+	stmt.Body = p.parseBlockStatement()
+	
+	return stmt
+}
+
+// parseMainBlockStatement parses main: block definitions (special Carrion syntax)
+func (p *Parser) parseMainBlockStatement() *ast.BlockStatement {
+	stmt := &ast.BlockStatement{Token: p.curToken}
+	
+	if !p.expectPeek(token.COLON) {
+		return nil
+	}
+	
+	if !p.expectPeek(token.NEWLINE) {
+		return nil
+	}
+	
+	// Parse the main block content
+	if !p.expectPeek(token.INDENT) {
+		return nil
+	}
+	
+	p.nextToken()
+	stmt.Statements = []ast.Statement{}
+	
+	for !p.curTokenIs(token.DEDENT) && !p.curTokenIs(token.EOF) {
+		if p.curTokenIs(token.NEWLINE) {
+			p.nextToken()
+			continue
+		}
+		
+		statement := p.parseStatement()
+		if statement != nil {
+			stmt.Statements = append(stmt.Statements, statement)
+		}
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
 // parseClassStatement parses grim (class) definitions
 func (p *Parser) parseClassStatement() *ast.ClassStatement {
 	stmt := &ast.ClassStatement{Token: p.curToken}
@@ -574,8 +707,8 @@ func (p *Parser) parseImportStatement() *ast.ImportStatement {
 func (p *Parser) parseIgnoreStatement() *ast.IgnoreStatement {
 	stmt := &ast.IgnoreStatement{Token: p.curToken}
 
-	// Skip optional semicolon and newline
-	if p.peekTokenIs(token.SEMICOLON) {
+	// Skip optional newline
+	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
@@ -593,7 +726,7 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	}
 	leftExp := prefix()
 
-	for !p.peekTokenIs(token.SEMICOLON) && precedence < p.peekPrecedence() {
+	for !p.peekTokenIs(token.NEWLINE) && !p.peekTokenIs(token.EOF) && precedence < p.peekPrecedence() {
 		infix := p.infixParseFns[p.peekToken.Type]
 		if infix == nil {
 			return leftExp
@@ -823,7 +956,7 @@ func (p *Parser) expectPeek(t token.TokenType) bool {
 
 // expectPeekIdent checks for identifier or keywords that can be used as identifiers
 func (p *Parser) expectPeekIdent() bool {
-	if p.peekTokenIs(token.IDENT) || p.peekTokenIs(token.INIT) || p.peekTokenIs(token.SELF) {
+	if p.peekTokenIs(token.IDENT) || p.peekTokenIs(token.INIT) || p.peekTokenIs(token.SELF) || p.peekTokenIs(token.MAIN) {
 		p.nextToken()
 		return true
 	} else {
@@ -832,9 +965,33 @@ func (p *Parser) expectPeekIdent() bool {
 	}
 }
 
+// skipNewlines skips multiple consecutive newline tokens
+func (p *Parser) skipNewlines() {
+	for p.curTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+}
+
+// expectNewlineAndIndent expects at least one newline followed by indent, skipping extra newlines
+func (p *Parser) expectNewlineAndIndent() bool {
+	if !p.expectPeek(token.NEWLINE) {
+		return false
+	}
+	
+	// Skip additional newlines
+	p.skipNewlines()
+	
+	if !p.curTokenIs(token.INDENT) {
+		p.addError(fmt.Sprintf("expected INDENT, got %s instead", p.curToken.Type))
+		return false
+	}
+	
+	return true
+}
+
 // curTokenIsIdent checks if current token can be used as identifier
 func (p *Parser) curTokenIsIdent() bool {
-	return p.curTokenIs(token.IDENT) || p.curTokenIs(token.INIT) || p.curTokenIs(token.SELF)
+	return p.curTokenIs(token.IDENT) || p.curTokenIs(token.INIT) || p.curTokenIs(token.SELF) || p.curTokenIs(token.MAIN)
 }
 
 // peekPrecedence returns the precedence of the peek token

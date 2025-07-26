@@ -200,7 +200,8 @@ func (l *Lexer) NextToken() token.Token {
 			}
 		} else if l.peekChar() == '*' {
 			// Block comment
-			return l.readBlockComment(line, col)
+			l.readBlockComment(line, col)
+			return l.NextToken() // Skip comment and get next token
 		} else if l.peekChar() == '=' {
 			ch := l.ch
 			l.readChar()
@@ -281,7 +282,8 @@ func (l *Lexer) NextToken() token.Token {
 	case '.':
 		tok = l.newToken(token.DOT, string(l.ch), line, col)
 	case '#':
-		return l.readLineComment(line, col)
+		l.readLineComment(line, col)
+		return l.NextToken() // Skip comment and get next token
 	case '@':
 		tok = l.newToken(token.AT, string(l.ch), line, col)
 	case '\n':
@@ -293,7 +295,8 @@ func (l *Lexer) NextToken() token.Token {
 		return l.readString('\'', line, col)
 	case '`':
 		if l.peekChar() == '`' && l.peekCharN(2) == '`' {
-			return l.readTripleBacktickComment(line, col)
+			l.readTripleBacktickComment(line, col)
+			return l.NextToken() // Skip comment and get next token
 		}
 		tok = l.newToken(token.ILLEGAL, string(l.ch), line, col)
 	case 0:

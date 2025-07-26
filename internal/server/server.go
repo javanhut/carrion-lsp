@@ -236,6 +236,8 @@ func (s *Server) handleRequest(ctx context.Context, req *protocol.Request) error
 		result, err = s.handleDocumentSymbolRequest(ctx, req)
 	case protocol.MethodTextDocumentFormatting:
 		result, err = s.handleFormattingRequest(ctx, req)
+	case protocol.MethodTextDocumentDiagnostic:
+		result, err = s.handleDiagnosticRequest(ctx, req)
 	default:
 		err = fmt.Errorf("method not found: %s", req.Method)
 	}
@@ -567,6 +569,34 @@ func (s *Server) handleFormattingRequest(ctx context.Context, req *protocol.Requ
 	}
 
 	return edits, nil
+}
+
+func (s *Server) handleDiagnosticRequest(ctx context.Context, req *protocol.Request) (interface{}, error) {
+	if !s.IsInitialized() {
+		return nil, fmt.Errorf("server not initialized")
+	}
+
+	var params protocol.DocumentDiagnosticParams
+	if err := s.parseParams(req.Params, &params); err != nil {
+		return nil, fmt.Errorf("failed to parse diagnostic params: %w", err)
+	}
+
+	s.logger.Printf("Diagnostic request for %s", params.TextDocument.URI)
+
+	// Get diagnostics from document manager
+	diagnostics, err := s.docManager.GetDiagnostics(params.TextDocument.URI)
+	if err != nil {
+		s.logger.Printf("Error getting diagnostics for %s: %v", params.TextDocument.URI, err)
+		return &protocol.DocumentDiagnosticReport{
+			Kind:  "full",
+			Items: []protocol.Diagnostic{},
+		}, nil
+	}
+
+	return &protocol.DocumentDiagnosticReport{
+		Kind:  "full",
+		Items: diagnostics,
+	}, nil
 }
 
 func (s *Server) handleReferencesRequest(ctx context.Context, req *protocol.Request) (interface{}, error) {

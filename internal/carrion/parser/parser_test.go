@@ -506,6 +506,55 @@ func TestImportStatement(t *testing.T) {
 	}
 }
 
+func TestMemberExpression(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"obj.member", "obj.member"},
+		{"obj.method()", "obj.method()"},
+		{"ex.example_print()", "ex.example_print()"},
+		{"self.value", "self.value"},
+		{"a.b.c", "a.b.c"},
+		{"a.b.c()", "a.b.c()"},
+	}
+
+	for _, tt := range tests {
+		p := createParser(tt.input)
+		program := p.ParseProgram()
+		checkParserErrors(t, p)
+
+		require.Len(t, program.Statements, 1, "program should have 1 statement")
+
+		stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+		require.True(t, ok, "program.Statements[0] is not ast.ExpressionStatement")
+		
+		assert.Equal(t, tt.expected, stmt.Expression.String())
+	}
+}
+
+func TestMemberExpressionWithNewline(t *testing.T) {
+	// Test that member expressions stop at newlines
+	input := `ex = Example()
+ex.example_print()`
+
+	p := createParser(input)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	require.Len(t, program.Statements, 2, "program should have 2 statements")
+
+	// First statement should be assignment
+	stmt1, ok := program.Statements[0].(*ast.AssignStatement)
+	require.True(t, ok, "program.Statements[0] is not ast.AssignStatement")
+	assert.Equal(t, "ex", stmt1.Name.Value)
+
+	// Second statement should be method call
+	stmt2, ok := program.Statements[1].(*ast.ExpressionStatement)
+	require.True(t, ok, "program.Statements[1] is not ast.ExpressionStatement")
+	assert.Equal(t, "ex.example_print()", stmt2.Expression.String())
+}
+
 // HELPER FUNCTIONS
 
 func testAssignStatement(t *testing.T, s ast.Statement, name string) bool {

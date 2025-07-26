@@ -544,3 +544,18 @@ type ReferenceContext struct {
 type DocumentSymbolParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
+
+// DocumentDiagnosticParams represents the parameters for textDocument/diagnostic request
+type DocumentDiagnosticParams struct {
+	TextDocument   TextDocumentIdentifier `json:"textDocument"`
+	Identifier     *string                `json:"identifier,omitempty"`
+	PreviousResult *string                `json:"previousResultId,omitempty"`
+}
+
+// DocumentDiagnosticReport represents the result of textDocument/diagnostic request
+type DocumentDiagnosticReport struct {
+	Kind           string                         `json:"kind"`
+	ResultId       *string                        `json:"resultId,omitempty"`
+	Items          []Diagnostic                   `json:"items"`
+	RelatedDocuments map[string]DocumentDiagnosticReport `json:"relatedDocuments,omitempty"`
+}

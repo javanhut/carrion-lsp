@@ -746,3 +746,16 @@ func getCompletionItemKind(symType symbol.SymbolType) protocol.CompletionItemKin
 		return protocol.CompletionItemKindText
 	}
 }
+
+// GetDiagnostics returns diagnostics for a document
+func (dm *DocumentManager) GetDiagnostics(uri string) ([]protocol.Diagnostic, error) {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	doc, exists := dm.documents[uri]
+	if !exists {
+		return nil, fmt.Errorf("document %s not found", uri)
+	}
+
+	return doc.Diagnostics, nil
+}
