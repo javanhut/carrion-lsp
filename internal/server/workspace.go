@@ -19,14 +19,16 @@ import (
 // WorkspaceManager handles multi-file analysis and dependency tracking
 type WorkspaceManager struct {
 	mu            sync.RWMutex
-	documents     map[string]*Document     // URI -> Document
-	dependencies  map[string][]string      // file -> list of files it imports
-	dependents    map[string][]string      // file -> list of files that import it
-	moduleCache   map[string]*CachedModule // module path -> cached analysis result
+	documents     sync.Map                      // URI -> Document (thread-safe map)
+	dependencies  sync.Map                      // file -> []string (thread-safe map)
+	dependents    sync.Map                      // file -> []string (thread-safe map)
+	moduleCache   sync.Map                      // module path -> CachedModule (thread-safe map)
 	resolver      *ModuleResolver
 	analysisQueue chan string // Files that need re-analysis
 	isAnalyzing   bool
-	symbolIndex   map[string]*GlobalSymbolEntry // symbol name -> global symbol info
+	symbolIndex   sync.Map                      // symbol name -> GlobalSymbolEntry (thread-safe map)
+	shutdownCh    chan struct{}                 // Signal shutdown to worker
+	workerDone    chan struct{}                 // Signal when worker is done
 }
 
 // CachedModule represents a cached analysis result for a module
@@ -57,13 +59,10 @@ type GlobalSymbolEntry struct {
 // NewWorkspaceManager creates a new workspace manager
 func NewWorkspaceManager(workspaceRoot, carrionPath string) *WorkspaceManager {
 	wm := &WorkspaceManager{
-		documents:     make(map[string]*Document),
-		dependencies:  make(map[string][]string),
-		dependents:    make(map[string][]string),
-		moduleCache:   make(map[string]*CachedModule),
 		resolver:      NewModuleResolver(workspaceRoot, carrionPath),
-		analysisQueue: make(chan string, 100),
-		symbolIndex:   make(map[string]*GlobalSymbolEntry),
+		analysisQueue: make(chan string, 1000), // Increased buffer size to reduce blocking
+		shutdownCh:    make(chan struct{}),
+		workerDone:    make(chan struct{}),
 	}
 
 	// Start background analysis worker
@@ -74,11 +73,8 @@ func NewWorkspaceManager(workspaceRoot, carrionPath string) *WorkspaceManager {
 
 // OpenDocument handles opening a document with workspace-aware analysis
 func (wm *WorkspaceManager) OpenDocument(params *protocol.DidOpenTextDocumentParams) (*Document, error) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
 	uri := params.TextDocument.URI
-	if _, exists := wm.documents[uri]; exists {
+	if _, exists := wm.documents.Load(uri); exists {
 		return nil, fmt.Errorf("document %s is already open", uri)
 	}
 
@@ -105,7 +101,7 @@ func (wm *WorkspaceManager) OpenDocument(params *protocol.DidOpenTextDocumentPar
 		}
 	}
 
-	wm.documents[uri] = doc
+	wm.documents.Store(uri, doc)
 
 	// Queue dependent files for re-analysis
 	wm.queueDependentsForAnalysis(uri)
@@ -115,14 +111,12 @@ func (wm *WorkspaceManager) OpenDocument(params *protocol.DidOpenTextDocumentPar
 
 // ChangeDocument handles document changes with dependency tracking
 func (wm *WorkspaceManager) ChangeDocument(params *protocol.DidChangeTextDocumentParams) (*Document, error) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
 	uri := params.TextDocument.URI
-	doc, exists := wm.documents[uri]
+	docInterface, exists := wm.documents.Load(uri)
 	if !exists {
 		return nil, fmt.Errorf("document %s is not open", uri)
 	}
+	doc := docInterface.(*Document)
 
 	// Update document version and content
 	doc.Version = params.TextDocument.Version
@@ -157,16 +151,13 @@ func (wm *WorkspaceManager) ChangeDocument(params *protocol.DidChangeTextDocumen
 
 // CloseDocument handles closing a document
 func (wm *WorkspaceManager) CloseDocument(params *protocol.DidCloseTextDocumentParams) error {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
 	uri := params.TextDocument.URI
-	if _, exists := wm.documents[uri]; !exists {
+	if _, exists := wm.documents.Load(uri); !exists {
 		return fmt.Errorf("document %s is not open", uri)
 	}
 
 	// Remove from documents but keep in cache for dependencies
-	delete(wm.documents, uri)
+	wm.documents.Delete(uri)
 
 	return nil
 }
@@ -290,7 +281,8 @@ func (wm *WorkspaceManager) loadModuleSymbols(moduleInfo *ModuleInfo) (map[strin
 	}
 
 	// Check cache first
-	if cached, exists := wm.moduleCache[moduleInfo.FilePath]; exists {
+	if cachedInterface, exists := wm.moduleCache.Load(moduleInfo.FilePath); exists {
+		cached := cachedInterface.(*CachedModule)
 		// TODO: Check if file has been modified
 		return cached.ExportedSymbols, nil
 	}
@@ -379,7 +371,8 @@ func (wm *WorkspaceManager) addImportedSymbols(a *analyzer.Analyzer, importInfo 
 // updateDependencies updates the dependency tracking
 func (wm *WorkspaceManager) updateDependencies(uri string, imports []ImportInfo) {
 	// Clear old dependencies
-	if oldDeps, exists := wm.dependencies[uri]; exists {
+	if oldDepsInterface, exists := wm.dependencies.Load(uri); exists {
+		oldDeps := oldDepsInterface.([]string)
 		for _, dep := range oldDeps {
 			wm.removeDependency(dep, uri)
 		}
@@ -394,34 +387,60 @@ func (wm *WorkspaceManager) updateDependencies(uri string, imports []ImportInfo)
 		}
 	}
 
-	wm.dependencies[uri] = newDeps
+	wm.dependencies.Store(uri, newDeps)
 }
 
 // addDependency adds a dependency relationship
 func (wm *WorkspaceManager) addDependency(dependency, dependent string) {
-	if wm.dependents[dependency] == nil {
-		wm.dependents[dependency] = []string{}
-	}
+	for {
+		dependentsInterface, _ := wm.dependents.LoadOrStore(dependency, []string{})
+		dependents := dependentsInterface.([]string)
 
-	// Add if not already present
-	for _, existing := range wm.dependents[dependency] {
-		if existing == dependent {
-			return
+		// Add if not already present
+		for _, existing := range dependents {
+			if existing == dependent {
+				return
+			}
 		}
-	}
 
-	wm.dependents[dependency] = append(wm.dependents[dependency], dependent)
+		updatedDependents := append(dependents, dependent)
+		// Use compare-and-swap to handle concurrent modifications
+		if wm.dependents.CompareAndSwap(dependency, dependents, updatedDependents) {
+			break
+		}
+		// If CAS failed, retry the operation
+	}
 }
 
 // removeDependency removes a dependency relationship
 func (wm *WorkspaceManager) removeDependency(dependency, dependent string) {
-	if deps, exists := wm.dependents[dependency]; exists {
+	for {
+		depsInterface, exists := wm.dependents.Load(dependency)
+		if !exists {
+			return
+		}
+		
+		deps := depsInterface.([]string)
+		found := false
+		var updatedDeps []string
+		
 		for i, dep := range deps {
 			if dep == dependent {
-				wm.dependents[dependency] = append(deps[:i], deps[i+1:]...)
+				updatedDeps = append(deps[:i], deps[i+1:]...)
+				found = true
 				break
 			}
 		}
+		
+		if !found {
+			return
+		}
+		
+		// Use compare-and-swap to handle concurrent modifications
+		if wm.dependents.CompareAndSwap(dependency, deps, updatedDeps) {
+			break
+		}
+		// If CAS failed, retry the operation
 	}
 }
 
@@ -434,7 +453,7 @@ func (wm *WorkspaceManager) cacheModuleAnalysis(filePath string, a *analyzer.Ana
 		}
 	}
 
-	wm.moduleCache[filePath] = &CachedModule{
+	cachedModule := &CachedModule{
 		FilePath:        filePath,
 		LastModified:    time.Now(),
 		Analyzer:        a,
@@ -442,16 +461,32 @@ func (wm *WorkspaceManager) cacheModuleAnalysis(filePath string, a *analyzer.Ana
 		Imports:         imports,
 		Errors:          a.GetErrors(),
 	}
+	wm.moduleCache.Store(filePath, cachedModule)
 }
 
 // queueDependentsForAnalysis queues dependent files for re-analysis
 func (wm *WorkspaceManager) queueDependentsForAnalysis(uri string) {
-	if dependents, exists := wm.dependents[uri]; exists {
+	if dependentsInterface, exists := wm.dependents.Load(uri); exists {
+		dependents := dependentsInterface.([]string)
 		for _, dependent := range dependents {
 			select {
 			case wm.analysisQueue <- dependent:
+				// Successfully queued
 			default:
-				// Queue is full, skip
+				// Queue is full, implement priority handling
+				// Remove oldest item and add new one to prevent queue overflow
+				select {
+				case <-wm.analysisQueue:
+					// Removed oldest item
+					select {
+					case wm.analysisQueue <- dependent:
+						// Successfully added new item
+					default:
+						// Still full, skip this one
+					}
+				default:
+					// Queue cleared in between, skip
+				}
 			}
 		}
 	}
@@ -459,32 +494,49 @@ func (wm *WorkspaceManager) queueDependentsForAnalysis(uri string) {
 
 // analysisWorker processes the analysis queue in the background
 func (wm *WorkspaceManager) analysisWorker() {
-	for uri := range wm.analysisQueue {
-		wm.mu.Lock()
-		if doc, exists := wm.documents[uri]; exists {
-			wm.analyzeDocumentWithWorkspace(doc)
+	defer close(wm.workerDone)
+	
+	for {
+		select {
+		case uri := <-wm.analysisQueue:
+			if docInterface, exists := wm.documents.Load(uri); exists {
+				doc := docInterface.(*Document)
+				wm.analyzeDocumentWithWorkspace(doc)
+			}
+		case <-wm.shutdownCh:
+			return
 		}
-		wm.mu.Unlock()
 	}
 }
 
 // GetDocument retrieves a document by URI
 func (wm *WorkspaceManager) GetDocument(uri string) (*Document, bool) {
-	wm.mu.RLock()
-	defer wm.mu.RUnlock()
-
-	doc, exists := wm.documents[uri]
-	return doc, exists
+	docInterface, exists := wm.documents.Load(uri)
+	if !exists {
+		return nil, false
+	}
+	return docInterface.(*Document), true
 }
 
 // GetAllDocuments returns all open documents
 func (wm *WorkspaceManager) GetAllDocuments() map[string]*Document {
-	wm.mu.RLock()
-	defer wm.mu.RUnlock()
-
 	result := make(map[string]*Document)
-	for uri, doc := range wm.documents {
+	wm.documents.Range(func(key, value interface{}) bool {
+		uri := key.(string)
+		doc := value.(*Document)
 		result[uri] = doc
-	}
+		return true
+	})
 	return result
+}
+
+// Shutdown gracefully shuts down the workspace manager
+func (wm *WorkspaceManager) Shutdown() error {
+	// Signal the worker to stop
+	close(wm.shutdownCh)
+	
+	// Wait for worker to finish
+	<-wm.workerDone
+	
+	return nil
 }

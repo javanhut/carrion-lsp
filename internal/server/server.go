@@ -1032,21 +1032,43 @@ func (s *Server) createHoverContent(sym *symbol.Symbol) string {
 
 	case symbol.ModuleSymbol:
 		content.WriteString(fmt.Sprintf("**Module**: `%s`\n\n", sym.Name))
+		
+		// Add module description for built-ins
+		switch sym.Name {
+		case "os":
+			content.WriteString("**Description**: Operating system interface module\n")
+			content.WriteString("Provides functions for interacting with the operating system.\n\n")
+		case "file":
+			content.WriteString("**Description**: File operations module\n")
+			content.WriteString("Provides functions for file input/output operations.\n\n")
+		case "http":
+			content.WriteString("**Description**: HTTP client module\n")
+			content.WriteString("Provides functions for making HTTP requests.\n\n")
+		case "time":
+			content.WriteString("**Description**: Time and date utilities module\n")
+			content.WriteString("Provides functions for time manipulation and formatting.\n\n")
+		case "math":
+			content.WriteString("**Description**: Mathematical functions module\n")
+			content.WriteString("Provides standard mathematical functions and constants.\n\n")
+		case "json":
+			content.WriteString("**Description**: JSON encoding and decoding module\n")
+			content.WriteString("Provides functions for working with JSON data.\n\n")
+		}
+		
 		if sym.Token.Line > 0 {
-			content.WriteString(fmt.Sprintf("**Imported at**: line %d\n", sym.Token.Line))
+			content.WriteString(fmt.Sprintf("**Imported at**: line %d\n\n", sym.Token.Line))
 		}
 
-		// Show module members
+		// Show module members with better descriptions
 		if len(sym.Members) > 0 {
-			content.WriteString("**Available symbols**:\n")
+			content.WriteString("**Available methods**:\n")
 			for name, member := range sym.Members {
-				switch member.Type {
-				case symbol.FunctionSymbol:
-					content.WriteString(fmt.Sprintf("- `%s()` - function\n", name))
-				case symbol.ClassSymbol:
-					content.WriteString(fmt.Sprintf("- `%s` - class\n", name))
-				case symbol.VariableSymbol:
-					content.WriteString(fmt.Sprintf("- `%s` - variable\n", name))
+				if member.Type == symbol.FunctionSymbol {
+					desc := ""
+					if member.Description != "" {
+						desc = fmt.Sprintf(" - %s", member.Description)
+					}
+					content.WriteString(fmt.Sprintf("- `%s()`%s\n", name, desc))
 				}
 			}
 			content.WriteString("\n")
@@ -1277,12 +1299,15 @@ func (s *Server) findSymbolInImportedModules(symbolName, currentURI string) ([]p
 	s.workspaceManager.mu.RLock()
 	defer s.workspaceManager.mu.RUnlock()
 
-	for filePath, cachedModule := range s.workspaceManager.moduleCache {
+	var foundLocation *protocol.Location
+	s.workspaceManager.moduleCache.Range(func(key, value interface{}) bool {
+		filePath := key.(string)
+		cachedModule := value.(*CachedModule)
 		if exportedSymbol, exists := cachedModule.ExportedSymbols[symbolName]; exists {
 			// Convert file path to URI
 			moduleURI := "file://" + filePath
 
-			location := protocol.Location{
+			foundLocation = &protocol.Location{
 				URI: moduleURI,
 				Range: protocol.Range{
 					Start: protocol.Position{
@@ -1295,10 +1320,16 @@ func (s *Server) findSymbolInImportedModules(symbolName, currentURI string) ([]p
 					},
 				},
 			}
-			return []protocol.Location{location}, nil
+			return false // Stop iteration
 		}
+		return true // Continue iteration
+	})
+	
+	if foundLocation != nil {
+		return []protocol.Location{*foundLocation}, nil
 	}
 
 	// Symbol not found in imported modules
 	return []protocol.Location{}, nil
 }
+

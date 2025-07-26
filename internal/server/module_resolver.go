@@ -126,16 +126,28 @@ func (mr *ModuleResolver) ResolveImport(moduleName, currentFile string) (*Module
 
 // checkLocalFile looks for the module in the current directory
 func (mr *ModuleResolver) checkLocalFile(currentDir, moduleName string) string {
+	// Sanitize module name to prevent path traversal
+	cleanModuleName, err := mr.sanitizeModuleName(moduleName)
+	if err != nil {
+		return ""
+	}
+
 	// Try different file patterns
 	patterns := []string{
-		fmt.Sprintf("%s.crl", moduleName),
-		fmt.Sprintf("%s.carrion", moduleName), // Legacy support
-		filepath.Join(moduleName, "init.crl"),
-		filepath.Join(moduleName, "__init__.crl"),
+		fmt.Sprintf("%s.crl", cleanModuleName),
+		fmt.Sprintf("%s.carrion", cleanModuleName), // Legacy support
+		filepath.Join(cleanModuleName, "init.crl"),
+		filepath.Join(cleanModuleName, "__init__.crl"),
 	}
 
 	for _, pattern := range patterns {
 		fullPath := filepath.Join(currentDir, pattern)
+		
+		// Ensure the resolved path is still within the workspace
+		if !mr.isWithinWorkspace(fullPath) {
+			continue
+		}
+		
 		if mr.fileExists(fullPath) {
 			return fullPath
 		}
@@ -210,14 +222,25 @@ func (mr *ModuleResolver) checkStandardLibrary(moduleName string) string {
 
 // checkPackageDir looks for a module within a package directory
 func (mr *ModuleResolver) checkPackageDir(packageDir, moduleName string) string {
+	// Sanitize module name to prevent path traversal
+	cleanModuleName, err := mr.sanitizeModuleName(moduleName)
+	if err != nil {
+		return ""
+	}
+
 	patterns := []string{
-		filepath.Join(packageDir, fmt.Sprintf("%s.crl", moduleName)),
-		filepath.Join(packageDir, moduleName, "init.crl"),
-		filepath.Join(packageDir, moduleName, "__init__.crl"),
-		filepath.Join(packageDir, moduleName, fmt.Sprintf("%s.crl", moduleName)),
+		filepath.Join(packageDir, fmt.Sprintf("%s.crl", cleanModuleName)),
+		filepath.Join(packageDir, cleanModuleName, "init.crl"),
+		filepath.Join(packageDir, cleanModuleName, "__init__.crl"),
+		filepath.Join(packageDir, cleanModuleName, fmt.Sprintf("%s.crl", cleanModuleName)),
 	}
 
 	for _, pattern := range patterns {
+		// Ensure the resolved path is still within safe boundaries
+		if !mr.isWithinWorkspace(pattern) && !mr.isWithinPackageDir(pattern, packageDir) {
+			continue
+		}
+		
 		if mr.fileExists(pattern) {
 			return pattern
 		}
@@ -312,4 +335,76 @@ func (mr *ModuleResolver) ResolveRelativeImport(moduleName, packageDir string) (
 	}
 
 	return nil, fmt.Errorf("relative module '%s' not found in package '%s'", moduleName, packageDir)
+}
+
+// sanitizeModuleName validates and cleans module names
+func (mr *ModuleResolver) sanitizeModuleName(moduleName string) (string, error) {
+	if moduleName == "" {
+		return "", fmt.Errorf("empty module name")
+	}
+	
+	// Check for dangerous patterns
+	if strings.Contains(moduleName, "..") {
+		return "", fmt.Errorf("module name contains path traversal")
+	}
+	
+	if strings.ContainsAny(moduleName, "/:*?\"<>|") {
+		return "", fmt.Errorf("module name contains invalid characters")
+	}
+	
+	// Ensure it's not an absolute path
+	if filepath.IsAbs(moduleName) {
+		return "", fmt.Errorf("module name cannot be absolute path")
+	}
+	
+	// Additional security: limit length
+	if len(moduleName) > 255 {
+		return "", fmt.Errorf("module name too long: %d characters", len(moduleName))
+	}
+	
+	return filepath.Clean(moduleName), nil
+}
+
+// isWithinWorkspace ensures a path is within the workspace boundaries
+func (mr *ModuleResolver) isWithinWorkspace(path string) bool {
+	if mr.WorkspaceRoot == "" {
+		return false
+	}
+	
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	
+	absWorkspace, err := filepath.Abs(mr.WorkspaceRoot)
+	if err != nil {
+		return false
+	}
+	
+	rel, err := filepath.Rel(absWorkspace, absPath)
+	if err != nil {
+		return false
+	}
+	
+	return !strings.HasPrefix(rel, "..")
+}
+
+// isWithinPackageDir ensures a path is within the specified package directory
+func (mr *ModuleResolver) isWithinPackageDir(path, packageDir string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	
+	absPackageDir, err := filepath.Abs(packageDir)
+	if err != nil {
+		return false
+	}
+	
+	rel, err := filepath.Rel(absPackageDir, absPath)
+	if err != nil {
+		return false
+	}
+	
+	return !strings.HasPrefix(rel, "..")
 }

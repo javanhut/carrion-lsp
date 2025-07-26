@@ -60,6 +60,10 @@ type Parser struct {
 	// Pratt parsing function maps
 	prefixParseFns map[token.TokenType]prefixParseFn
 	infixParseFns  map[token.TokenType]infixParseFn
+	
+	// Recursion depth tracking for security
+	depth    int
+	maxDepth int
 }
 
 type (
@@ -70,8 +74,10 @@ type (
 // New creates a new parser instance
 func New(l *lexer.Lexer) *Parser {
 	p := &Parser{
-		lexer:  l,
-		errors: []string{},
+		lexer:    l,
+		errors:   []string{},
+		depth:    0,
+		maxDepth: 1000, // Limit parsing depth to prevent stack overflow
 	}
 
 	// Initialize prefix parse functions
@@ -381,6 +387,15 @@ func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
 
 // parseBlockStatement parses block statements
 func (p *Parser) parseBlockStatement() *ast.BlockStatement {
+	// Check recursion depth to prevent stack overflow
+	if p.depth >= p.maxDepth {
+		p.addError(fmt.Sprintf("maximum parsing depth exceeded (%d)", p.maxDepth))
+		return nil
+	}
+	
+	p.depth++
+	defer func() { p.depth-- }()
+	
 	block := &ast.BlockStatement{Token: p.curToken}
 	block.Statements = []ast.Statement{}
 
@@ -719,6 +734,15 @@ func (p *Parser) parseIgnoreStatement() *ast.IgnoreStatement {
 
 // parseExpression parses expressions using Pratt parsing
 func (p *Parser) parseExpression(precedence int) ast.Expression {
+	// Check recursion depth to prevent stack overflow
+	if p.depth >= p.maxDepth {
+		p.addError(fmt.Sprintf("maximum parsing depth exceeded (%d)", p.maxDepth))
+		return nil
+	}
+	
+	p.depth++
+	defer func() { p.depth-- }()
+	
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
 		p.noPrefixParseFnError(p.curToken.Type)

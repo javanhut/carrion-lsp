@@ -21,16 +21,17 @@ const (
 
 // Symbol represents a symbol in the symbol table
 type Symbol struct {
-	Name       string
-	Type       SymbolType
-	Scope      *Scope
-	Node       ast.Node           // AST node where symbol is defined
-	Token      token.Token        // Token for the symbol name
-	DataType   string             // Inferred or declared type (e.g., "int", "str", "MyClass")
-	Parameters []*Symbol          // For functions - their parameters
-	ReturnType string             // For functions - return type
-	Parent     *Symbol            // For classes - parent class
-	Members    map[string]*Symbol // For classes - methods and attributes
+	Name        string
+	Type        SymbolType
+	Scope       *Scope
+	Node        ast.Node           // AST node where symbol is defined
+	Token       token.Token        // Token for the symbol name
+	DataType    string             // Inferred or declared type (e.g., "int", "str", "MyClass")
+	Parameters  []*Symbol          // For functions - their parameters
+	ReturnType  string             // For functions - return type
+	Parent      *Symbol            // For classes - parent class
+	Members     map[string]*Symbol // For classes - methods and attributes
+	Description string             // Documentation string for hover info
 }
 
 // Position returns the line and column where this symbol is defined

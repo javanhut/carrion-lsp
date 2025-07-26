@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/javanhut/carrion-lsp/internal/carrion/ast"
 	"github.com/javanhut/carrion-lsp/internal/carrion/symbol"
@@ -18,11 +19,72 @@ type Analyzer struct {
 
 // New creates a new analyzer
 func New() *Analyzer {
-	return &Analyzer{
+	analyzer := &Analyzer{
 		SymbolTable: symbol.NewSymbolTable(),
 		Errors:      []string{},
 		Diagnostics: []Diagnostic{},
 		References:  make(map[string][]ReferenceLocation),
+	}
+	
+	// Initialize built-in symbols
+	analyzer.initializeBuiltins()
+	
+	return analyzer
+}
+
+// initializeBuiltins defines built-in functions and modules
+func (a *Analyzer) initializeBuiltins() {
+	// Built-in functions
+	builtinFunctions := []string{
+		"print", "len", "type", "str", "int", "float", "bool", "list", "dict",
+		"range", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+		"min", "max", "sum", "any", "all", "abs", "round", "pow", "ord", "chr",
+		"input", "open", "exit", "help",
+	}
+	
+	for _, name := range builtinFunctions {
+		a.SymbolTable.Define(
+			name,
+			symbol.BuiltinSymbol,
+			nil, // No AST node for built-ins
+			token.Token{Type: token.IDENT, Literal: name, Line: 0, Column: 0},
+		)
+	}
+	
+	// Built-in modules/classes with their common methods
+	builtinModules := map[string][]string{
+		"os": {"cwd", "listdir", "mkdir", "rmdir", "remove", "rename", "getcwd", "chdir", "getenv", "setenv"},
+		"sys": {"argv", "exit", "version", "platform", "path"},
+		"time": {"time", "sleep", "strftime", "strptime", "clock"},
+		"math": {"sin", "cos", "tan", "sqrt", "pow", "floor", "ceil", "abs"},
+		"random": {"random", "randint", "choice", "shuffle", "seed"},
+		"json": {"loads", "dumps", "load", "dump"},
+		"re": {"match", "search", "findall", "sub", "split"},
+		"http": {"get", "post", "put", "delete", "request"},
+		"file": {"open", "read", "write", "close", "exists"},
+		"socket": {"socket", "bind", "listen", "accept", "connect", "send", "recv"},
+	}
+	
+	for moduleName, methods := range builtinModules {
+		moduleSymbol, _ := a.SymbolTable.Define(
+			moduleName,
+			symbol.ModuleSymbol,
+			nil, // No AST node for built-ins
+			token.Token{Type: token.IDENT, Literal: moduleName, Line: 0, Column: 0},
+		)
+		
+		// Add methods to the module
+		for _, methodName := range methods {
+			methodSymbol := &symbol.Symbol{
+				Name:     methodName,
+				Type:     symbol.FunctionSymbol,
+				Node:     nil,
+				Token:    token.Token{Type: token.IDENT, Literal: methodName, Line: 0, Column: 0},
+				DataType: "function",
+				Members:  make(map[string]*symbol.Symbol),
+			}
+			moduleSymbol.Members[methodName] = methodSymbol
+		}
 	}
 }
 
@@ -101,8 +163,25 @@ func (a *Analyzer) analyzeAssignStatement(node *ast.AssignStatement) {
 	)
 
 	if err != nil {
-		a.addError(fmt.Sprintf("line %d: %s", node.Token.Line, err.Error()))
-		a.addDiagnostic(node.Name.Token, err.Error(), DiagnosticError)
+		// Check if this is trying to shadow a built-in - that's okay
+		if existingSym, exists := a.SymbolTable.Lookup(node.Name.Value); exists && 
+		   (existingSym.Type == symbol.BuiltinSymbol || existingSym.Type == symbol.ModuleSymbol) &&
+		   existingSym.Token.Line == 0 { // Built-ins have line 0
+			// Allow shadowing built-ins - force define in current scope
+			scope := a.SymbolTable.CurrentScope
+			varSymbol = &symbol.Symbol{
+				Name:     node.Name.Value,
+				Type:     symbol.VariableSymbol,
+				Node:     node.Value,
+				Token:    node.Name.Token,
+				DataType: varType,
+				Members:  make(map[string]*symbol.Symbol),
+			}
+			scope.Symbols[node.Name.Value] = varSymbol
+		} else {
+			a.addError(fmt.Sprintf("line %d: %s", node.Token.Line, err.Error()))
+			a.addDiagnostic(node.Name.Token, err.Error(), DiagnosticError)
+		}
 	} else if varSymbol != nil {
 		// Set the inferred type
 		varSymbol.DataType = varType
@@ -389,7 +468,7 @@ func (a *Analyzer) analyzeCallExpression(node *ast.CallExpression) {
 	// Check if function exists and is callable
 	if ident, ok := node.Function.(*ast.Identifier); ok {
 		if sym, exists := a.SymbolTable.Lookup(ident.Value); exists {
-			if sym.Type != symbol.FunctionSymbol && sym.Type != symbol.BuiltinSymbol && sym.Type != symbol.ClassSymbol {
+			if sym.Type != symbol.FunctionSymbol && sym.Type != symbol.BuiltinSymbol && sym.Type != symbol.ClassSymbol && sym.Type != symbol.ModuleSymbol {
 				a.addError(fmt.Sprintf("line %d: '%s' is not callable", node.Token.Line, ident.Value))
 				a.addDiagnostic(node.Token, fmt.Sprintf("'%s' is not callable", ident.Value), DiagnosticError)
 			}
@@ -405,9 +484,55 @@ func (a *Analyzer) analyzeIndexExpression(node *ast.IndexExpression) {
 
 // analyzeMemberExpression analyzes member access (obj.member)
 func (a *Analyzer) analyzeMemberExpression(node *ast.MemberExpression) {
+	// Analyze the object being accessed
 	a.analyzeExpression(node.Object)
-	// Note: We don't check if the member exists on the object type here
-	// That would require more sophisticated type analysis
+	
+	// Check if the object exists and has the requested member
+	if ident, ok := node.Object.(*ast.Identifier); ok {
+		if sym, exists := a.SymbolTable.Lookup(ident.Value); exists {
+			// Check what type of object this is
+			switch sym.Type {
+			case symbol.ClassSymbol:
+				// For class symbols, check if the member exists in the class
+				if _, hasMember := sym.Members[node.Member.Value]; !hasMember {
+					a.addError(fmt.Sprintf("line %d: class '%s' has no member '%s'", 
+						node.Member.Token.Line, sym.Name, node.Member.Value))
+					a.addDiagnostic(node.Member.Token, 
+						fmt.Sprintf("class '%s' has no member '%s'", sym.Name, node.Member.Value), 
+						DiagnosticError)
+				}
+			case symbol.VariableSymbol:
+				// For variables, check if the variable's type has the member
+				if sym.DataType != "" {
+					// Look up the type (class or module) of this variable
+					if typeSym, typeExists := a.SymbolTable.Lookup(sym.DataType); typeExists {
+						if typeSym.Type == symbol.ClassSymbol || typeSym.Type == symbol.ModuleSymbol {
+							if _, hasMember := typeSym.Members[node.Member.Value]; !hasMember {
+								objectType := "object"
+								if typeSym.Type == symbol.ModuleSymbol {
+									objectType = "module instance"
+								}
+								a.addError(fmt.Sprintf("line %d: %s of type '%s' has no member '%s'", 
+									node.Member.Token.Line, objectType, sym.DataType, node.Member.Value))
+								a.addDiagnostic(node.Member.Token, 
+									fmt.Sprintf("%s of type '%s' has no member '%s'", objectType, sym.DataType, node.Member.Value), 
+									DiagnosticError)
+							}
+						}
+					}
+				}
+			case symbol.ModuleSymbol:
+				// For module symbols (static access), check module members
+				if _, hasMember := sym.Members[node.Member.Value]; !hasMember {
+					a.addError(fmt.Sprintf("line %d: module '%s' has no member '%s'", 
+						node.Member.Token.Line, sym.Name, node.Member.Value))
+					a.addDiagnostic(node.Member.Token, 
+						fmt.Sprintf("module '%s' has no member '%s'", sym.Name, node.Member.Value), 
+						DiagnosticError)
+				}
+			}
+		}
+	}
 }
 
 // inferFunctionReturnType infers the return type of a function from its return statements
@@ -488,12 +613,32 @@ func (a *Analyzer) GetCompletionItems(line, column int, prefix string) []*symbol
 	var completionItems []*symbol.Symbol
 
 	for name, sym := range allSymbols {
-		if prefix == "" || (len(name) >= len(prefix) && name[:len(prefix)] == prefix) {
+		if prefix == "" || strings.HasPrefix(name, prefix) {
 			completionItems = append(completionItems, sym)
 		}
 	}
 
-	return completionItems
+	// Sort completion items by relevance (built-ins last, local symbols first)
+	return a.sortCompletionItems(completionItems)
+}
+
+// sortCompletionItems sorts completion items by relevance
+func (a *Analyzer) sortCompletionItems(items []*symbol.Symbol) []*symbol.Symbol {
+	// Simple sort: put user-defined symbols first, then built-ins
+	var userDefined []*symbol.Symbol
+	var builtins []*symbol.Symbol
+	
+	for _, item := range items {
+		if item.Token.Line == 0 { // Built-ins have line 0
+			builtins = append(builtins, item)
+		} else {
+			userDefined = append(userDefined, item)
+		}
+	}
+	
+	// Combine: user-defined first, then built-ins
+	result := append(userDefined, builtins...)
+	return result
 }
 
 // GetMemberCompletionItems returns completion items for member access (obj.member)
@@ -514,13 +659,23 @@ func (a *Analyzer) GetMemberCompletionItems(objectName, memberPrefix string, lin
 	// Handle different types of objects
 	switch objectSymbol.Type {
 	case symbol.VariableSymbol:
-		// For variables, try to determine their class type
+		// Check if this variable is a module instance (e.g., sys = os())
 		if objectSymbol.DataType != "" && objectSymbol.DataType != "unknown" {
-			// Look for a class with this name
+			// First check if it's a built-in module instance
+			if moduleMembers := a.getBuiltinModuleMembers(objectSymbol.DataType); len(moduleMembers) > 0 {
+				for _, member := range moduleMembers {
+					if memberPrefix == "" || strings.HasPrefix(member.Name, memberPrefix) {
+						completionItems = append(completionItems, member)
+					}
+				}
+				return completionItems
+			}
+			
+			// Then check if it's a class instance
 			if classSymbol, exists := scope.Lookup(objectSymbol.DataType); exists && classSymbol.Type == symbol.ClassSymbol {
 				// Add class members (methods and attributes)
 				for memberName, member := range classSymbol.Members {
-					if memberPrefix == "" || (len(memberName) >= len(memberPrefix) && memberName[:len(memberPrefix)] == memberPrefix) {
+					if memberPrefix == "" || strings.HasPrefix(memberName, memberPrefix) {
 						completionItems = append(completionItems, member)
 					}
 				}
@@ -530,7 +685,7 @@ func (a *Analyzer) GetMemberCompletionItems(objectName, memberPrefix string, lin
 	case symbol.ClassSymbol:
 		// For class symbols (static access), return class members
 		for memberName, member := range objectSymbol.Members {
-			if memberPrefix == "" || (len(memberName) >= len(memberPrefix) && memberName[:len(memberPrefix)] == memberPrefix) {
+			if memberPrefix == "" || strings.HasPrefix(memberName, memberPrefix) {
 				completionItems = append(completionItems, member)
 			}
 		}
@@ -538,13 +693,132 @@ func (a *Analyzer) GetMemberCompletionItems(objectName, memberPrefix string, lin
 	case symbol.ModuleSymbol:
 		// For modules, return exported symbols
 		for memberName, member := range objectSymbol.Members {
-			if memberPrefix == "" || (len(memberName) >= len(memberPrefix) && memberName[:len(memberPrefix)] == memberPrefix) {
+			if memberPrefix == "" || strings.HasPrefix(memberName, memberPrefix) {
 				completionItems = append(completionItems, member)
 			}
 		}
 	}
 
 	return completionItems
+}
+
+// getBuiltinModuleMembers returns the members for built-in module instances
+func (a *Analyzer) getBuiltinModuleMembers(moduleName string) []*symbol.Symbol {
+	var members []*symbol.Symbol
+	
+	switch moduleName {
+	case "os":
+		members = append(members, &symbol.Symbol{
+			Name: "cwd", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Get current working directory",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "listdir", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "List directory contents",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "mkdir", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Create a directory",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "rmdir", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Remove a directory",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "remove", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Remove a file",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "rename", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Rename a file or directory",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "getcwd", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Get current working directory (alias for cwd)",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "chdir", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Change current directory",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "getenv", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Get environment variable",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "setenv", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Set environment variable",
+		})
+	case "file":
+		members = append(members, &symbol.Symbol{
+			Name: "open", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Open a file",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "read", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Read from a file",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "write", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Write to a file",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "close", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Close a file",
+		})
+	case "http":
+		members = append(members, &symbol.Symbol{
+			Name: "get", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Make HTTP GET request",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "post", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Make HTTP POST request",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "put", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Make HTTP PUT request",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "delete", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Make HTTP DELETE request",
+		})
+	case "time":
+		members = append(members, &symbol.Symbol{
+			Name: "now", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Get current timestamp",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "sleep", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Sleep for specified seconds",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "format", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Format timestamp",
+		})
+	case "math":
+		members = append(members, &symbol.Symbol{
+			Name: "abs", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Absolute value",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "sqrt", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Square root",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "pow", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Power function",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "floor", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Floor function",
+		})
+		members = append(members, &symbol.Symbol{
+			Name: "ceil", Type: symbol.FunctionSymbol, DataType: "function",
+			Description: "Ceiling function",
+		})
+	}
+	
+	return members
 }
 
 // inferTypeFromAssignment infers the type of a variable from its assignment value
@@ -557,6 +831,9 @@ func (a *Analyzer) inferTypeFromAssignment(valueNode ast.Expression) string {
 			if sym, exists := a.SymbolTable.Lookup(ident.Value); exists {
 				if sym.Type == symbol.ClassSymbol {
 					// This is a class constructor, the variable type is the class name
+					return sym.Name
+				} else if sym.Type == symbol.ModuleSymbol {
+					// This is a module constructor call, the variable type is the module name
 					return sym.Name
 				} else if sym.Type == symbol.FunctionSymbol && sym.ReturnType != "" {
 					// This is a function call, use the return type
