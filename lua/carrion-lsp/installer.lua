@@ -86,6 +86,30 @@ local function build_from_source()
   return binary_path
 end
 
+-- Create symlink in ~/.local/bin for PATH access
+local function create_symlink()
+  local binary_path = get_binary_path()
+  local local_bin = os.getenv("HOME") .. "/.local/bin"
+  local symlink_path = local_bin .. "/carrion-lsp"
+  
+  -- Create ~/.local/bin if it doesn't exist
+  vim.fn.mkdir(local_bin, "p")
+  
+  -- Remove existing symlink if it exists
+  if uv.fs_stat(symlink_path) then
+    uv.fs_unlink(symlink_path)
+  end
+  
+  -- Create symlink
+  local success, err = uv.fs_symlink(binary_path, symlink_path)
+  if success then
+    print("Created symlink: " .. symlink_path)
+  else
+    print("Warning: Failed to create symlink in ~/.local/bin: " .. (err or "unknown error"))
+    print("You may need to manually add " .. binary_path .. " to your PATH")
+  end
+end
+
 -- Install the LSP server
 function M.install()
   if is_installed() then
@@ -94,21 +118,30 @@ function M.install()
   end
   
   build_from_source()
+  create_symlink()
 end
 
 -- Update the LSP server
 function M.update()
   build_from_source()
+  create_symlink()
 end
 
 -- Uninstall the LSP server
 function M.uninstall()
   local binary_path = get_binary_path()
   local install_dir = get_install_dir()
+  local symlink_path = os.getenv("HOME") .. "/.local/bin/carrion-lsp"
   
   if uv.fs_stat(binary_path) then
     uv.fs_unlink(binary_path)
     print("Removed carrion-lsp binary")
+  end
+  
+  -- Remove symlink
+  if uv.fs_stat(symlink_path) then
+    uv.fs_unlink(symlink_path)
+    print("Removed symlink: " .. symlink_path)
   end
   
   -- Remove install directory if empty

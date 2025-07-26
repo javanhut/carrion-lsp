@@ -153,6 +153,7 @@ func isTransportError(err error) bool {
 	// Common transport errors that indicate client disconnection
 	errStr := err.Error()
 	return errStr == "EOF" ||
+		contains(errStr, "EOF") ||
 		errStr == "io: read/write on closed pipe" ||
 		errStr == "use of closed network connection" ||
 		contains(errStr, "broken pipe") ||
