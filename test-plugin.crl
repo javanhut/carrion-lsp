@@ -1,0 +1,14 @@
+# Test Carrion file to verify plugin functionality
+grim TestClass:
+    spell init():
+        self.value = 42
+    
+    spell get_value():
+        return self.value
+
+spell main():
+    test = TestClass()
+    print(test.get_value())
+
+main:
+    main()

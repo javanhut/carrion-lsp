@@ -1,0 +1,283 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Carrion",
+  "scopeName": "source.carrion",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#classes"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#builtins"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.carrion",
+          "begin": "#",
+          "end": "$",
+          "captures": {
+            "0": {
+              "name": "punctuation.definition.comment.carrion"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.carrion",
+          "match": "\\b(if|elif|else|for|while|in|not|and|or|is|attempt|ensnare|resolve|skip|stop|return|import|as|from)\\b"
+        },
+        {
+          "name": "keyword.declaration.carrion",
+          "match": "\\b(spell|grim)\\b"
+        },
+        {
+          "name": "keyword.other.carrion",
+          "match": "\\b(self|ignore)\\b"
+        },
+        {
+          "name": "constant.language.carrion",
+          "match": "\\b(True|False|None)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.carrion",
+          "begin": "('''|\"\"\")",
+          "end": "\\1",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.carrion",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.carrion",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            }
+          ]
+        },
+        {
+          "name": "string.interpolated.carrion",
+          "begin": "f(['\"])",
+          "end": "\\1",
+          "beginCaptures": {
+            "0": {
+              "name": "string.quoted.f.carrion"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "string.quoted.f.carrion"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            },
+            {
+              "name": "meta.embedded.expression.carrion",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.template-expression.begin.carrion"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.template-expression.end.carrion"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.carrion",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.carrion",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.carrion",
+          "match": "\\b\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.hex.carrion",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.carrion",
+          "match": "\\b0[oO][0-7]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.carrion",
+          "match": "\\b0[bB][01]+\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arithmetic.carrion",
+          "match": "\\+|\\-|\\*|/|//|%|\\*\\*"
+        },
+        {
+          "name": "keyword.operator.comparison.carrion",
+          "match": "==|!=|<|>|<=|>="
+        },
+        {
+          "name": "keyword.operator.logical.carrion",
+          "match": "\\band\\b|\\bor\\b|\\bnot\\b"
+        },
+        {
+          "name": "keyword.operator.assignment.carrion",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.membership.carrion",
+          "match": "\\bin\\b|\\bnot\\s+in\\b"
+        },
+        {
+          "name": "keyword.operator.identity.carrion",
+          "match": "\\bis\\b|\\bis\\s+not\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.carrion",
+          "begin": "\\b(spell)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "end": "\\):",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.function.carrion"
+            },
+            "2": {
+              "name": "entity.name.function.carrion"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#function-parameters"
+            }
+          ]
+        },
+        {
+          "name": "meta.function-call.carrion",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.carrion"
+            }
+          }
+        }
+      ]
+    },
+    "function-parameters": {
+      "patterns": [
+        {
+          "name": "variable.parameter.carrion",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "classes": {
+      "patterns": [
+        {
+          "name": "meta.class.carrion",
+          "begin": "\\b(grim)\\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\\s*\\(([a-zA-Z_][a-zA-Z0-9_]*)\\))?\\s*:",
+          "end": "(?=\\n)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.class.carrion"
+            },
+            "2": {
+              "name": "entity.name.class.carrion"
+            },
+            "3": {
+              "name": "entity.other.inherited-class.carrion"
+            }
+          }
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.carrion",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.carrion",
+          "match": "\\b(print|len|str|int|float|bool|list|dict|range|enumerate|zip|map|filter|sorted|sum|min|max|abs|round|open)\\b"
+        },
+        {
+          "name": "support.type.carrion",
+          "match": "\\b(int|float|str|bool|list|dict|tuple|set)\\b"
+        }
+      ]
+    }
+  }
+}
