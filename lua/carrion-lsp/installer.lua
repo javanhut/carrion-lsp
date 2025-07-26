@@ -132,4 +132,29 @@ function M.is_installed()
   return is_installed()
 end
 
+-- Get version of installed binary
+function M.get_version()
+  if not is_installed() then
+    return nil
+  end
+  
+  local binary_path = get_binary_path()
+  local handle = vim.loop.spawn(binary_path, {
+    args = {"--version"},
+    stdio = {nil, "pipe", nil}
+  }, function() end)
+  
+  if handle then
+    local stdout = handle:read_start(function(err, data)
+      if data then
+        return vim.trim(data)
+      end
+    end)
+    vim.loop.close(handle)
+    return stdout or "unknown"
+  end
+  
+  return "unknown"
+end
+
 return M

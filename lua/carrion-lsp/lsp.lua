@@ -48,4 +48,16 @@ function M.is_attached()
   return false
 end
 
+-- Check if carrion-lsp server is running
+function M.is_running()
+  local clients = M.get_clients()
+  return #clients > 0
+end
+
+-- Get the first carrion-lsp client
+function M.get_client()
+  local clients = M.get_clients()
+  return clients[1]
+end
+
 return M
