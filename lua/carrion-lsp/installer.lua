@@ -139,19 +139,10 @@ function M.get_version()
   end
   
   local binary_path = get_binary_path()
-  local handle = vim.loop.spawn(binary_path, {
-    args = {"--version"},
-    stdio = {nil, "pipe", nil}
-  }, function() end)
+  local result = vim.fn.system(binary_path .. " --version 2>/dev/null")
   
-  if handle then
-    local stdout = handle:read_start(function(err, data)
-      if data then
-        return vim.trim(data)
-      end
-    end)
-    vim.loop.close(handle)
-    return stdout or "unknown"
+  if vim.v.shell_error == 0 then
+    return vim.trim(result)
   end
   
   return "unknown"
